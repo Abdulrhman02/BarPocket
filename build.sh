@@ -3,7 +3,6 @@ set -euo pipefail
 
 source_dir="${0:A:h}"
 app_dir="${source_dir}/dist/BarPocket.app"
-module_cache_dir="${source_dir}/dist/.module-cache"
 target_arch="${TARGET_ARCH:-$(uname -m)}"
 signing_identity="${CODESIGN_IDENTITY:--}"
 
@@ -12,7 +11,9 @@ if [[ "$target_arch" != "arm64" && "$target_arch" != "x86_64" ]]; then
   exit 1
 fi
 
-mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$module_cache_dir"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+module_cache_dir="$(mktemp -d "${source_dir}/dist/.module-cache.XXXXXX")"
+trap 'rm -r "$module_cache_dir"' EXIT
 /usr/bin/xcrun swiftc -O -swift-version 5 -target "${target_arch}-apple-macosx13.0" \
   -module-cache-path "$module_cache_dir" \
   -framework AppKit -framework ApplicationServices -framework ServiceManagement \
