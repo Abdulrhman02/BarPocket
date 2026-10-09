@@ -43,6 +43,15 @@ No subscription, no account, and no screen recording.
 - **A few useful switches.** Choose hover opening, automatic closing, and launch at login.
 - **A tidy exit.** A normal quit restores the hidden items to the menu bar.
 
+## Settings
+
+Native macOS controls, short explanations, and a monochrome settings logo that follows your system appearance.
+
+<p align="center">
+  <img src="docs/images/settings-light.png" width="400" alt="BarPocket settings in light appearance">
+  <img src="docs/images/settings-dark.png" width="400" alt="BarPocket settings in dark appearance">
+</p>
+
 ## Get it running
 
 ### Requirements
@@ -111,7 +120,8 @@ If an item's menu cannot be detected, BarPocket may leave its native item visibl
 | --- | --- |
 | `main.swift` | The native AppKit app. |
 | `build.sh` | A one-command local build. |
-| `BarPocket.icns`, `icon-1024.png` | The app icon and its source artwork. |
+| `BarPocket.icns`, `icon-1024.png` | The graphite app icon and its source artwork. |
+| `PocketLight.png`, `PocketDark.png` | Appearance variants for the settings logo. |
 | `generate_icon.swift` | Script that regenerates the PNG artwork. |
 | `docs/` | Behavior notes and fixes for common problems. |
 | `dist/` | Your local build output; ignored by Git. |

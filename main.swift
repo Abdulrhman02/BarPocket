@@ -3,6 +3,24 @@ import ApplicationServices
 import Quartz
 import ServiceManagement
 
+private final class PocketBrandImageView: NSImageView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshArtwork()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshArtwork()
+    }
+
+    private func refreshArtwork() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        guard let path = Bundle.main.path(forResource: dark ? "PocketDark" : "PocketLight", ofType: "png") else { return }
+        image = NSImage(contentsOfFile: path)
+    }
+}
+
 private struct MenuExtra {
     let element: AXUIElement
     let pid: pid_t
@@ -78,6 +96,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         toggle.isVisible = true
         divider.isVisible = true
         toggle.button?.image = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "BarPocket")
+        toggle.button?.image?.isTemplate = true
         toggle.button?.imagePosition = .imageOnly
         toggle.button?.toolTip = "Open pocket. Drag a visible menu bar icon here to hide it."
         toggle.button?.target = self
@@ -829,9 +848,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func updateAccessLabel() {
-        accessLabel?.stringValue = AXIsProcessTrusted()
-            ? "Accessibility access is ready."
-            : "Accessibility access is needed to find and click other apps' icons. If its switch is already on, turn it off and on again after updating BarPocket."
+        accessLabel?.stringValue = AXIsProcessTrusted() ? "Access enabled" : "Access required"
     }
 
     @objc private func showSettings() {
@@ -842,44 +859,87 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func makeSettingsWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 470), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "BarPocket Settings"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window.title = "BarPocket"
         window.isReleasedWhenClosed = false
-        let root = NSView(frame: window.contentView!.bounds)
+        window.titlebarAppearsTransparent = true
+        let root = NSVisualEffectView(frame: window.contentView!.bounds)
+        root.material = .windowBackground
+        root.blendingMode = .behindWindow
+        root.state = .active
         window.contentView = root
-        let heading = NSTextField(labelWithString: "BarPocket")
-        heading.font = .systemFont(ofSize: 26, weight: .bold)
-        let detail = NSTextField(wrappingLabelWithString: "A simple pocket for your menu bar icons. Click or hover over its icon to see them in a row below the menu bar.")
-        detail.font = .systemFont(ofSize: 13)
-        detail.textColor = .secondaryLabelColor
-        let access = NSTextField(wrappingLabelWithString: AXIsProcessTrusted() ? "Accessibility access is ready." : "Accessibility access is needed to find and click other apps' icons. If its switch is already on, turn it off and on again after updating BarPocket.")
-        access.font = .systemFont(ofSize: 12)
-        accessLabel = access
-        let accessButton = NSButton(title: "Open Accessibility Settings", target: self, action: #selector(openAccessibilitySettings))
-        let privacy = NSTextField(wrappingLabelWithString: "BarPocket does not record your screen. Previously saved menu bar glyphs stay on this Mac; new icons appear as initials.")
-        privacy.font = .systemFont(ofSize: 12)
-        let guide = NSTextField(wrappingLabelWithString: "Drag an icon from the pocket to the menu bar to keep it visible. Drag a visible menu bar icon onto BarPocket or its open pocket to hide it. Use Manage icons if an app intercepts the drag.")
-        guide.font = .systemFont(ofSize: 12)
+        func text(_ value: String, size: CGFloat = 12, weight: NSFont.Weight = .regular, secondary: Bool = false) -> NSTextField {
+            let field = NSTextField(wrappingLabelWithString: value)
+            field.font = .systemFont(ofSize: size, weight: weight)
+            field.textColor = secondary ? .secondaryLabelColor : .labelColor
+            return field
+        }
+        func card(_ title: String, _ children: [NSView]) -> NSBox {
+            let box = NSBox()
+            box.boxType = .custom
+            box.borderColor = .separatorColor
+            box.borderWidth = 0
+            box.cornerRadius = 10
+            box.fillColor = .controlBackgroundColor
+            box.contentViewMargins = NSSize(width: 16, height: 14)
+            let column = NSStackView(views: [text(title, size: 13, weight: .semibold)] + children)
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 12
+            column.translatesAutoresizingMaskIntoConstraints = false
+            box.contentView!.addSubview(column)
+            NSLayoutConstraint.activate([
+                column.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor),
+                column.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor),
+                column.topAnchor.constraint(equalTo: box.contentView!.topAnchor),
+                column.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor)
+            ])
+            return box
+        }
+        let heading = text("BarPocket", size: 25)
+        heading.font = NSFont(name: "Georgia", size: 25) ?? .systemFont(ofSize: 25)
+        let icon = PocketBrandImageView()
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        let intro = NSStackView(views: [heading, text("MENU BAR UTILITY", size: 9, weight: .medium, secondary: true)])
+        intro.orientation = .vertical; intro.alignment = .leading; intro.spacing = 5
+        let header = NSStackView(views: [icon, intro]); header.spacing = 13
+        func switchRow(_ title: String, _ detail: String, _ enabled: Bool, _ selector: Selector) -> NSView {
+            let control = NSSwitch(); control.target = self; control.action = selector; control.state = enabled ? .on : .off
+            control.setAccessibilityLabel(title)
+            let labels = NSStackView(views: [text(title, size: 13, weight: .medium), text(detail, size: 11, secondary: true)])
+            labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 4
+            let row = NSStackView(views: [labels, NSView(), control]); row.spacing = 16
+            row.widthAnchor.constraint(equalToConstant: 432).isActive = true
+            return row
+        }
+        let behavior = card("GENERAL", [
+            switchRow("Open on hover", "Show the pocket when the pointer rests on its icon.", hoverEnabled, #selector(hoverChanged(_:))),
+            switchRow("Close automatically", "Dismiss the pocket when you move away.", autoCloseEnabled, #selector(autoCloseChanged(_:))),
+            switchRow("Launch at login", "Keep BarPocket ready when your Mac starts.", SMAppService.mainApp.status == .enabled, #selector(launchChanged(_:)))
+        ])
         let manage = NSButton(title: "Manage icons…", target: self, action: #selector(showManageWindow))
-        let hover = NSButton(checkboxWithTitle: "Open pocket on hover", target: self, action: #selector(hoverChanged(_:)))
-        hover.state = hoverEnabled ? .on : .off
-        let autoClose = NSButton(checkboxWithTitle: "Close pocket when pointer leaves", target: self, action: #selector(autoCloseChanged(_:)))
-        autoClose.state = autoCloseEnabled ? .on : .off
-        let launch = NSButton(checkboxWithTitle: "Launch at login", target: self, action: #selector(launchChanged(_:)))
-        launch.state = SMAppService.mainApp.status == .enabled ? .on : .off
         let show = NSButton(title: "Open pocket", target: self, action: #selector(showPanelFromMenu))
-        let arrange = NSButton(title: "Expand icons for arranging", target: self, action: #selector(toggleNativeBar))
-        let stack = NSStackView(views: [heading, detail, access, accessButton, privacy, guide, manage, hover, autoClose, launch, show, arrange])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
+        let arrange = NSButton(title: "Expand menu bar", target: self, action: #selector(toggleNativeBar))
+        let actions = NSStackView(views: [manage, show, arrange]); actions.spacing = 8
+        let items = card("YOUR MENU BAR", [text("Choose what stays visible and what goes in the pocket.", secondary: true), actions])
+        let access = text(AXIsProcessTrusted() ? "Access enabled" : "Access required", size: 12, weight: .medium)
+        accessLabel = access
+        let accessButton = NSButton(title: "Open System Settings…", target: self, action: #selector(openAccessibilitySettings))
+        let permissions = card("ACCESSIBILITY", [access, text("Allow BarPocket to move and open menu bar items.", size: 11, secondary: true), accessButton])
+        let privacy = text("Works locally on your Mac. No account needed.", size: 11, secondary: true)
+        let stack = NSStackView(views: [header, behavior, items, permissions, privacy])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 22)
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24)
         ])
+        for box in [behavior, items, permissions] { box.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        privacy.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         return window
     }
 
@@ -960,9 +1020,9 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let boundary = divider.button?.window?.frame.minX ?? 0
         move(extra: extra, keepVisible: extra.frame.midX < boundary + 2)
     }
-    @objc private func hoverChanged(_ sender: NSButton) { defaults.set(sender.state == .on, forKey: "hoverEnabled") }
-    @objc private func autoCloseChanged(_ sender: NSButton) { defaults.set(sender.state == .on, forKey: "autoCloseEnabled") }
-    @objc private func launchChanged(_ sender: NSButton) {
+    @objc private func hoverChanged(_ sender: NSSwitch) { defaults.set(sender.state == .on, forKey: "hoverEnabled") }
+    @objc private func autoCloseChanged(_ sender: NSSwitch) { defaults.set(sender.state == .on, forKey: "autoCloseEnabled") }
+    @objc private func launchChanged(_ sender: NSSwitch) {
         if sender.state == .on { try? SMAppService.mainApp.register() }
         else { try? SMAppService.mainApp.unregister() }
     }

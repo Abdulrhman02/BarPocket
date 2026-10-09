@@ -19,6 +19,8 @@ trap 'rm -r "$module_cache_dir"' EXIT
   -framework AppKit -framework ApplicationServices -framework ServiceManagement \
   "$source_dir/main.swift" -o "$app_dir/Contents/MacOS/BarPocket"
 cp "$source_dir/BarPocket.icns" "$app_dir/Contents/Resources/BarPocket.icns"
+cp "$source_dir/PocketLight.png" "$app_dir/Contents/Resources/PocketLight.png"
+cp "$source_dir/PocketDark.png" "$app_dir/Contents/Resources/PocketDark.png"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
