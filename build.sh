@@ -14,10 +14,10 @@ fi
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 module_cache_dir="$(mktemp -d "${source_dir}/dist/.module-cache.XXXXXX")"
 trap 'rm -r "$module_cache_dir"' EXIT
-/usr/bin/xcrun swiftc -O -swift-version 5 -target "${target_arch}-apple-macosx13.0" \
+/usr/bin/xcrun swiftc -O -swift-version 5 -target "${target_arch}-apple-macosx14.0" \
   -module-cache-path "$module_cache_dir" \
-  -framework AppKit -framework ApplicationServices -framework ServiceManagement \
-  "$source_dir/main.swift" "$source_dir/SingleInstance.swift" -o "$app_dir/Contents/MacOS/BarPocket"
+  -framework ScreenCaptureKit -framework AppKit -framework ApplicationServices -framework ServiceManagement \
+  "$source_dir/main.swift" "$source_dir/SingleInstance.swift" "$source_dir/IconSnapshots.swift" -o "$app_dir/Contents/MacOS/BarPocket"
 cp "$source_dir/BarPocket.icns" "$app_dir/Contents/Resources/BarPocket.icns"
 cp "$source_dir/PocketLight.png" "$app_dir/Contents/Resources/PocketLight.png"
 cp "$source_dir/PocketDark.png" "$app_dir/Contents/Resources/PocketDark.png"
@@ -31,9 +31,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>BarPocket</string>
 <key>CFBundleIconFile</key><string>BarPocket</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.7.1</string>
-<key>CFBundleVersion</key><string>8</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>CFBundleShortVersionString</key><string>0.8</string>
+<key>CFBundleVersion</key><string>23</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Quartz
+import ScreenCaptureKit
 import ServiceManagement
 
 private struct MenuExtra {
@@ -21,6 +22,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     private var manageWindow: NSWindow?
     private var isCollapsed = false
     private var accessibilityReady = false
+    private var screenCaptureReady = false
     private var permissionWindow: NSWindow?
     private var permissionTimer: Timer?
     private var isPanelOpen = false
@@ -41,6 +43,17 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     private var hiddenCache: [MenuExtra] = []
     private var managedExtras: [MenuExtra] = []
     private var glyphs: [String: NSImage] = [:]
+    private let snapshots = IconSnapshots()
+    private var capturingIcons = false
+    private var restoredPinned = false
+    private var captureReady = false
+    private var capturedPIDs: [String: pid_t] = [:]
+    private var captureFailures = Set<String>()
+    private var captureRetryAfter: [String: Date] = [:]
+    private var captureRetryCounts: [String: Int] = [:]
+    private var inventoryElements: [String: AXUIElement] = [:]
+    private var iconAppearance = ""
+    private var captureWindow: NSWindow?
     private var panelButtons: [String: NSButton] = [:]
     private weak var accessLabel: NSTextField?
     private let defaults = UserDefaults.standard
@@ -62,10 +75,11 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         }
         installMouseMonitor()
         NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshCache()
                 self?.updateAccessLabel()
+                self?.refreshVisibleStatusImages()
             }
         }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -108,7 +122,8 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screenChanged() {
-        if isCollapsed { collapse() }
+        glyphs.removeAll(); capturedPIDs.removeAll(); captureFailures.removeAll()
+        captureReady = false; expand()
         refreshCache()
         if isPanelOpen { presentPanel() }
     }
@@ -126,7 +141,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func collapse() {
-        guard AXIsProcessTrusted() else { expand(); return }
+        guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess(), captureReady, !capturingIcons, captureFailures.isEmpty else { expand(); return }
         divider.length = collapsedLength
         isCollapsed = true
     }
@@ -157,6 +172,8 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
+        let refresh = NSMenuItem(title: "Refresh icons", action: #selector(refreshIcons), keyEquivalent: "")
+        refresh.target = self; menu.addItem(refresh)
         let show = NSMenuItem(title: "Show hidden icons", action: #selector(showPanelFromMenu), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
@@ -202,7 +219,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func mouseMoved() {
-        guard AXIsProcessTrusted() else { return }
+        guard AXIsProcessTrusted(), captureReady, !capturingIcons else { return }
         guard let buttonFrame = toggle.button?.window?.frame else { return }
         let point = NSEvent.mouseLocation
         let hoverZone = buttonFrame.insetBy(dx: -10, dy: -9)
@@ -333,23 +350,16 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let tile = NSVisualEffectView(frame: frame)
         tile.material = .popover
         tile.state = .active
-        tile.appearance = NSAppearance(named: .darkAqua)
+        tile.appearance = NSApp.effectiveAppearance
         tile.wantsLayer = true
         tile.layer?.cornerRadius = 9
         tile.layer?.masksToBounds = true
         if let glyph = glyphs[extra.id] {
             let image = NSImageView(frame: NSRect(x: 4, y: 4, width: 26, height: 26))
             image.image = displayGlyph(glyph)
-            image.contentTintColor = .white
+            image.contentTintColor = .labelColor
             image.imageScaling = .scaleProportionallyDown
             tile.addSubview(image)
-        } else {
-            let text = NSTextField(labelWithString: String(extra.title.prefix(2)).uppercased())
-            text.frame = NSRect(x: 0, y: 9, width: 34, height: 16)
-            text.alignment = .center
-            text.textColor = .white
-            text.font = .systemFont(ofSize: 10, weight: .semibold)
-            tile.addSubview(text)
         }
         preview.contentView = tile
         dragPreview = preview
@@ -375,8 +385,51 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func refreshCache() {
-        guard AXIsProcessTrusted() else { return }
-        let updated = inventory()
+        guard AXIsProcessTrusted(), !capturingIcons else { return }
+        let available = allExtras()
+        let appearance = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])?.rawValue ?? ""
+        if appearance != iconAppearance {
+            iconAppearance = appearance
+            glyphs.removeAll(); capturedPIDs.removeAll(); captureFailures.removeAll()
+            captureReady = false; expand()
+        }
+        for item in available {
+            if let previous = inventoryElements[item.id], !CFEqual(previous, item.element) {
+                glyphs.removeValue(forKey: item.id)
+                capturedPIDs.removeValue(forKey: item.id)
+                captureFailures.remove(item.id)
+            }
+        }
+        inventoryElements = Dictionary(uniqueKeysWithValues: available.map { ($0.id, $0.element) })
+        let activeIDs = Set(available.map(\.id))
+        let previousIDs = Set(glyphs.keys)
+        glyphs = glyphs.filter { activeIDs.contains($0.key) }
+        capturedPIDs = capturedPIDs.filter { activeIDs.contains($0.key) }
+        captureFailures.formIntersection(activeIDs)
+        if previousIDs != Set(glyphs.keys) {
+            defaults.set(glyphs.compactMapValues { $0.tiffRepresentation }, forKey: "iconStillImages")
+            defaults.set(capturedPIDs.mapValues { Int($0) }, forKey: "iconStillPIDs")
+        }
+        for item in available {
+            if capturedPIDs[item.id] != item.pid {
+                captureFailures.remove(item.id)
+                glyphs.removeValue(forKey: item.id)
+                capturedPIDs.removeValue(forKey: item.id)
+                captureRetryAfter.removeValue(forKey: item.id)
+                captureRetryCounts.removeValue(forKey: item.id)
+            } else if captureRetryAfter[item.id].map({ Date() >= $0 }) ?? false {
+                captureFailures.remove(item.id)
+                glyphs.removeValue(forKey: item.id)
+                captureRetryAfter.removeValue(forKey: item.id)
+            }
+        }
+        captureRetryAfter = captureRetryAfter.filter { activeIDs.contains($0.key) }
+        captureRetryCounts = captureRetryCounts.filter { activeIDs.contains($0.key) }
+        let missing = available.filter { (glyphs[$0.id] == nil || capturedPIDs[$0.id] != $0.pid) && !captureFailures.contains($0.id) }
+        if !missing.isEmpty && !capturingIcons {
+            Task { @MainActor in await captureIcons() }
+        }
+        let updated = inventory().filter { glyphs[$0.id] != nil }
         let oldIDs = hiddenCache.map(\.id)
         hiddenCache = updated
         if isPanelOpen && oldIDs != updated.map(\.id) {
@@ -385,43 +438,132 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func refreshVisibleStatusImages() {
+        guard isPanelOpen, !capturingIcons, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else { return }
+        // Only read native item windows while the pocket is visible. Never stage
+        // or move icons for periodic updates; retain the previous image on failure.
+        var layoutChanged = false
+        let windows = snapshots.nativeWindows()
+        for item in allExtras() where glyphs[item.id] != nil {
+            if let image = snapshots.nativeImage(pid: item.pid, frame: item.frame, windows: windows) {
+                glyphs[item.id] = image
+                let glyph = displayGlyph(image)
+                if let button = panelButtons[item.id] {
+                    let width = max(26, glyph.size.width + 8)
+                    if let constraint = button.constraints.first(where: { $0.firstAttribute == .width }),
+                       abs(constraint.constant - width) > 0.01 { layoutChanged = true }
+                    button.image = glyph
+                }
+            }
+        }
+        if layoutChanged { presentPanel() }
+    }
+
     private func restorePinnedExtras() async {
-        guard AXIsProcessTrusted() else { return }
+        // Divider length changes settle asynchronously in WindowServer/AX.
+        // Wait before deciding that a stored pin is already on the visible side.
+        try? await Task.sleep(for: .milliseconds(350))
         let pinned = defaults.stringArray(forKey: "pinnedExtras") ?? []
         for id in pinned {
-            guard let boundary = divider.button?.window?.frame.minX,
-                  let extra = allExtras().first(where: { $0.id == id }),
-                  extra.frame.midX < boundary + 2 else { continue }
-            if postTargetedCommandDrag(extra: extra, keepVisible: true) {
+            for _ in 0..<3 {
+                guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess(),
+                      let boundary = divider.button?.window?.frame.minX,
+                      let extra = allExtras().first(where: { $0.id == id }) else { break }
+                if extra.frame.midX >= boundary + 2 { break }
+                guard postTargetedCommandDrag(extra: extra, keepVisible: true) else { break }
                 try? await Task.sleep(for: .milliseconds(320))
             }
         }
         refreshCache()
     }
 
+    private func captureIcons(force: Bool = false) async {
+        guard !capturingIcons, AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else { return }
+        capturingIcons = true
+        let shouldCollapse = isCollapsed || !captureReady
+        let windows = snapshots.nativeWindows()
+        for item in allExtras() where force || capturedPIDs[item.id] != item.pid || (glyphs[item.id] == nil && !captureFailures.contains(item.id)) {
+            if force { captureRetryCounts.removeValue(forKey: item.id) }
+            if let image = snapshots.nativeImage(pid: item.pid, frame: item.frame, windows: windows) {
+                glyphs[item.id] = image
+                capturedPIDs[item.id] = item.pid
+                captureFailures.remove(item.id)
+                captureRetryAfter.removeValue(forKey: item.id)
+                captureRetryCounts.removeValue(forKey: item.id)
+            } else {
+                let failures = captureRetryCounts[item.id, default: 0] + 1
+                captureRetryCounts[item.id] = failures
+                captureRetryAfter[item.id] = IconSnapshots.retryDelay(afterFailures: failures).map { Date().addingTimeInterval($0) }
+                captureFailures.insert(item.id)
+                capturedPIDs[item.id] = item.pid
+            }
+        }
+        defaults.set(Array(captureFailures), forKey: "iconStillFailures")
+        defaults.set(glyphs.compactMapValues { $0.tiffRepresentation }, forKey: "iconStillImages")
+        defaults.set(capturedPIDs.mapValues { Int($0) }, forKey: "iconStillPIDs")
+        defaults.set(iconAppearance, forKey: "iconStillAppearance")
+        captureReady = captureFailures.isEmpty
+        capturingIcons = false
+        if shouldCollapse && captureFailures.isEmpty { collapse() } else { expand() }
+        if captureFailures.isEmpty {
+            captureWindow?.orderOut(nil)
+            toggle.button?.toolTip = "Open pocket. Drag a visible menu bar icon here to hide it."
+        } else {
+            toggle.button?.toolTip = "Some native icon images are unavailable. Icons remain visible. Choose Refresh icons to retry."
+        }
+        if !restoredPinned { restoredPinned = true; await restorePinnedExtras() }
+        refreshCache()
+        if isPanelOpen { extras = hiddenCache; presentPanel() }
+    }
+
+    @objc private func refreshIcons() {
+        guard CGPreflightScreenCaptureAccess() else { showCaptureSetup(); return }
+        captureFailures.removeAll()
+        Task { @MainActor in await captureIcons(force: true) }
+    }
+
+    private func showCaptureSetup() {
+        expand()
+        if captureWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 340), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Menu bar icon images"
+            window.isReleasedWhenClosed = false
+            let description = NSTextField(wrappingLabelWithString: "Allow still captures of menu bar icons\n\nmacOS calls this Screen Recording. BarPocket takes brief, Retina-resolution still images when apps appear or appearance changes, and every three seconds while the pocket is open to update status badges. It does not run a video stream, capture audio, or upload images.\n\nIf permission is unavailable or capture fails, native icons stay visible. Still capture requires macOS 14 or later.")
+            let allow = NSButton(title: "Allow icon images…", target: self, action: #selector(requestIconAccess))
+            let stack = NSStackView(views: [description, allow])
+            stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            window.contentView!.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
+                stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
+                stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24)
+            ])
+            captureWindow = window
+        }
+        captureWindow?.center(); captureWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func requestIconAccess() {
+        _ = CGRequestScreenCaptureAccess()
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        Task { @MainActor in await captureIcons() }
+    }
+
     private func loadGlyphCache() {
-        let saved = defaults.dictionary(forKey: "statusGlyphCache") as? [String: Data] ?? [:]
-        glyphs = saved.compactMapValues { NSImage(data: $0) }
+        iconAppearance = defaults.string(forKey: "iconStillAppearance") ?? ""
+        let saved = defaults.dictionary(forKey: "iconStillImages") as? [String: Data] ?? [:]
+        glyphs = saved.compactMapValues {
+            guard let image = NSImage(data: $0), let bitmap = NSBitmapImageRep(data: $0),
+                  let cg = bitmap.cgImage, IconSnapshots.hasArtwork(cg) else { return nil }
+            return image
+        }
+        capturedPIDs = (defaults.dictionary(forKey: "iconStillPIDs") as? [String: Int] ?? [:]).mapValues { pid_t($0) }
     }
 
     private func displayGlyph(_ original: NSImage) -> NSImage {
-        guard let copy = original.copy() as? NSImage,
-              let data = original.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: data) else { return original }
-        var visible = 0
-        var colored = 0
-        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
-            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                      color.alphaComponent > 0.15 else { continue }
-                visible += 1
-                let maximum = max(color.redComponent, color.greenComponent, color.blueComponent)
-                let minimum = min(color.redComponent, color.greenComponent, color.blueComponent)
-                if maximum > 0.15 && (maximum - minimum) / maximum > 0.18 { colored += 1 }
-            }
-        }
-        if visible > 0 && Double(colored) / Double(visible) < 0.03 { copy.isTemplate = true }
-        return copy
+        return IconSnapshots.normalized(original)
     }
 
     private func showPanel() {
@@ -431,15 +573,20 @@ private final class PocketController: NSObject, NSApplicationDelegate {
             showPermissionSetup()
             return
         }
+        guard CGPreflightScreenCaptureAccess() else {
+            expand(); showCaptureSetup(); return
+        }
         closeTimer?.invalidate(); closeTimer = nil
+        refreshCache()
         extras = hiddenCache
         presentPanel()
+        refreshVisibleStatusImages()
         if extras.isEmpty { refreshCache() }
     }
 
     private func presentPanel() {
         let content = makePanelContent()
-        let idealWidth = CGFloat(max(extras.count, 1)) * 27 + 16
+        let idealWidth = extras.isEmpty ? 76 : extras.reduce(CGFloat(15)) { $0 + max(26, (glyphs[$1.id].map(displayGlyph)?.size.width ?? 18) + 8) + 1 }
         let width = min(max(idealWidth, 76), (NSScreen.main?.frame.width ?? 900) - 20)
         let height: CGFloat = 40
         if panel == nil {
@@ -476,7 +623,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         background.material = .popover
         background.blendingMode = .behindWindow
         background.state = .active
-        background.appearance = NSAppearance(named: .darkAqua)
+        background.appearance = NSApp.effectiveAppearance
         background.wantsLayer = true
         background.layer?.cornerRadius = 11
         background.layer?.masksToBounds = true
@@ -492,12 +639,15 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         background.addSubview(scroll)
         let row = NSStackView()
         row.orientation = .horizontal
+        // Menu bar items follow physical screen positions even in an RTL UI.
+        // Keep artwork and click/drag identity in that same order.
+        row.userInterfaceLayoutDirection = .leftToRight
         row.spacing = 1
         row.alignment = .centerY
         row.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
         row.translatesAutoresizingMaskIntoConstraints = false
         if extras.isEmpty {
-            let label = NSTextField(labelWithString: "No hidden icons found.")
+            let label = NSTextField(labelWithString: capturingIcons ? "Updating icon images…" : "No hidden icons found.")
             label.font = .systemFont(ofSize: 12)
             label.textColor = .secondaryLabelColor
             row.addArrangedSubview(label)
@@ -507,23 +657,16 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 button.bezelStyle = .recessed
                 button.isBordered = false
                 button.image = glyphs[extra.id].map(displayGlyph)
-                button.imagePosition = button.image == nil ? .noImage : .imageOnly
-                button.contentTintColor = .white
-                if button.image == nil {
-                    button.attributedTitle = NSAttributedString(
-                        string: String(extra.title.prefix(2)).uppercased(),
-                        attributes: [.foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 10, weight: .semibold)]
-                    )
-                    button.contentTintColor = NSColor.white
-                }
-                button.imageScaling = .scaleProportionallyDown
+                button.imagePosition = .imageOnly
+                button.contentTintColor = .labelColor
+                button.imageScaling = .scaleNone
                 button.toolTip = "\(extra.name): \(extra.title) — click to open"
                 button.tag = index
                 panelButtons[extra.id] = button
                 button.target = self
                 button.action = #selector(extraClicked(_:))
                 button.translatesAutoresizingMaskIntoConstraints = false
-                button.widthAnchor.constraint(equalToConstant: 26).isActive = true
+                button.widthAnchor.constraint(equalToConstant: max(26, (button.image?.size.width ?? 18) + 8)).isActive = true
                 button.heightAnchor.constraint(equalToConstant: 26).isActive = true
                 let recognizer = NSClickGestureRecognizer(target: self, action: #selector(extraRightClicked(_:)))
                 recognizer.buttonMask = 0x2
@@ -567,14 +710,14 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 NSSound.beep(); return
             }
             let openedDuringMove = interfaceWindowIDs(pid: extra.pid).subtracting(beforeWindows)
-            var popups = popupIDs(near: visible.frame.midX).subtracting(beforePopups)
+            var popups = popupIDs(near: visible.frame).subtracting(beforePopups)
             var clicked = false
             var axResult: AXError = .failure
             if openedDuringMove.isEmpty && popups.isEmpty {
                 clicked = clickVisibleExtra(visible)
                 for _ in 0..<12 where popups.isEmpty {
                     try? await Task.sleep(for: .milliseconds(100))
-                    popups = popupIDs(near: visible.frame.midX).subtracting(beforePopups)
+                    popups = popupIDs(near: visible.frame).subtracting(beforePopups)
                     if !interfaceWindowIDs(pid: extra.pid).subtracting(beforeWindows).isEmpty { break }
                 }
             }
@@ -583,20 +726,24 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 axResult = AXUIElementPerformAction(visible.element, kAXPressAction as CFString)
                 for _ in 0..<10 where popups.isEmpty {
                     try? await Task.sleep(for: .milliseconds(100))
-                    popups = popupIDs(near: visible.frame.midX).subtracting(beforePopups)
+                    popups = popupIDs(near: visible.frame).subtracting(beforePopups)
                     if !interfaceWindowIDs(pid: extra.pid).subtracting(beforeWindows).isEmpty { break }
                 }
             }
             let opened = interfaceWindowIDs(pid: extra.pid).subtracting(beforeWindows)
             defaults.set("clicked=\(clicked) ax=\(axResult.rawValue) visibleX=\(Int(visible.frame.midX)) windows=\(opened.count) popups=\(popups.count)", forKey: "activationDiagnostics")
             if !popups.isEmpty || !opened.isEmpty {
-                activatingID = nil
                 var quietChecks = 0
+                let deadline = Date().addingTimeInterval(60)
                 while quietChecks < 5 {
+                    guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess(), Date() < deadline else {
+                        // Leave the native icon reachable if its interface remains open.
+                        refreshCache()
+                        return
+                    }
                     try? await Task.sleep(for: .milliseconds(150))
-                    let currentPopups = popupIDs(near: visible.frame.midX).subtracting(beforePopups)
-                    let currentWindows = interfaceWindowIDs(pid: extra.pid).intersection(opened)
-                    quietChecks = currentPopups.isEmpty && currentWindows.isEmpty ? quietChecks + 1 : 0
+                    let currentPopups = popupIDs(near: visible.frame).intersection(popups)
+                    quietChecks = currentPopups.isEmpty ? quietChecks + 1 : 0
                 }
             } else {
                 // If activation did not expose a menu, leave its real icon reachable
@@ -605,7 +752,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 refreshCache()
                 return
             }
-            if let current = allExtras().first(where: { $0.id == extra.id }) {
+            if AXIsProcessTrusted(), CGPreflightScreenCaptureAccess(), let current = allExtras().first(where: { $0.id == extra.id }) {
                 _ = postTargetedCommandDrag(extra: current, keepVisible: false)
                 try? await Task.sleep(for: .milliseconds(240))
             }
@@ -617,19 +764,22 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         var result: [Int: CGRect] = [:]
         for info in windows {
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer >= 0 && layer < 1000 && layer != Int(kCGStatusWindowLevel),
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer > 0 && layer < 1000 && layer != Int(kCGStatusWindowLevel),
                   let id = (info[kCGWindowNumber as String] as? NSNumber)?.intValue,
                   let bounds = info[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: bounds),
-                  frame.width > 60, frame.height > 40, frame.minY < 150 else { continue }
+                  frame.width > 60, frame.height > 40 else { continue }
             result[id] = frame
         }
         return result
     }
 
-    private func popupIDs(near x: CGFloat) -> Set<Int> {
+    private func popupIDs(near item: CGRect) -> Set<Int> {
         Set(menuPopupWindows().compactMap { id, frame in
-            frame.minX - 80 <= x && x <= frame.maxX + 80 ? id : nil
+            // Native windows and AX share top-left coordinates, including negative
+            // origins. Only interfaces anchored just below this item's menu bar qualify.
+            frame.minX - 80 <= item.midX && item.midX <= frame.maxX + 80 &&
+            frame.minY >= item.minY - 10 && frame.minY <= item.maxY + 80 ? id : nil
         })
     }
 
@@ -648,17 +798,12 @@ private final class PocketController: NSObject, NSApplicationDelegate {
 
     private func clickVisibleExtra(_ extra: MenuExtra) -> Bool {
         guard AXIsProcessTrusted() else { return false }
-        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
-        let candidate = windows.compactMap { info -> CGRect? in
-            guard let layer = info[kCGWindowLayer as String] as? Int,
-                  layer == Int(kCGStatusWindowLevel),
-                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds),
-                  abs(frame.midX - extra.frame.midX) < 12,
-                  abs(frame.width - extra.frame.width) < 20 else { return nil }
-            return frame
-        }.min(by: { abs($0.midX - extra.frame.midX) < abs($1.midX - extra.frame.midX) })
-        guard let frame = candidate, frame.midX > 0 else { return false }
+        let candidate = snapshots.nativeWindows().filter {
+            abs($0.frame.midX - extra.frame.midX) < 12 &&
+            abs($0.frame.midY - extra.frame.midY) < 20 &&
+            abs($0.frame.width - extra.frame.width) < 20
+        }.min { abs($0.frame.midX - extra.frame.midX) < abs($1.frame.midX - extra.frame.midX) }
+        guard let frame = candidate?.frame else { return false }
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
         let point = CGPoint(x: frame.midX, y: frame.midY)
         func event(_ type: CGEventType) -> CGEvent? {
@@ -749,23 +894,30 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     private func postTargetedCommandDrag(extra: MenuExtra, keepVisible: Bool) -> Bool {
         guard AXIsProcessTrusted() else { return false }
         guard let dividerFrame = divider.button?.window?.frame else { return false }
-        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
-        let records: [(id: Int, pid: pid_t, layer: Int, frame: CGRect)] = windows.compactMap { info in
-            guard let layer = info[kCGWindowLayer as String] as? Int,
-                  let id = (info[kCGWindowNumber as String] as? NSNumber)?.intValue,
-                  let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
-                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds) else { return nil }
-            return (id, pid, layer, frame)
+        let records = snapshots.nativeWindows().map {
+            (id: Int($0.id), pid: $0.pid, layer: Int(kCGStatusWindowLevel), frame: $0.frame)
         }
-        let wideStatusWindows = records.filter { $0.layer == Int(kCGStatusWindowLevel) && $0.frame.width > 200 }
+        let matchedDisplay = NSScreen.screens.min { lhs, rhs in
+            func distance(_ screen: NSScreen) -> CGFloat {
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return .greatestFiniteMagnitude }
+                return abs(CGDisplayBounds(CGDirectDisplayID(number.uint32Value)).minY-extra.frame.midY)
+            }
+            return distance(lhs)<distance(rhs)
+        }
+        guard let display = matchedDisplay ?? divider.button?.window?.screen ?? NSScreen.main,
+              let displayNumber = display.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+        let displayBounds = CGDisplayBounds(CGDirectDisplayID(displayNumber.uint32Value))
+        defaults.set("display=\(displayBounds) item=\(extra.frame) wide=\(records.filter { $0.frame.width>200 }.map { $0.frame })", forKey: "nativeDragWindows")
+        let wideStatusWindows = records.filter {
+            $0.layer == Int(kCGStatusWindowLevel) && $0.frame.width > 200 &&
+            abs($0.frame.midY - extra.frame.midY) < 20
+        }
         guard let target = wideStatusWindows.min(by: {
                   abs($0.frame.minX - dividerFrame.minX) + abs($0.frame.width - dividerFrame.width)
                     < abs($1.frame.minX - dividerFrame.minX) + abs($1.frame.width - dividerFrame.width)
               }),
-              let item = records.filter({ $0.layer == Int(kCGStatusWindowLevel) && abs($0.frame.midX - extra.frame.midX) < 12 && abs($0.frame.width - extra.frame.width) < 20 })
+              let item = records.filter({ $0.layer == Int(kCGStatusWindowLevel) && abs($0.frame.midX - extra.frame.midX) < 12 && abs($0.frame.width - extra.frame.width) < 20 && abs($0.frame.midY - extra.frame.midY) < 20 })
                 .min(by: { abs($0.frame.midX - extra.frame.midX) < abs($1.frame.midX - extra.frame.midX) }),
-              let display = NSScreen.main,
               let source = CGEventSource(stateID: NSRunningApplication(processIdentifier: item.pid)?.bundleIdentifier == "com.apple.controlcenter" ? .hidSystemState : .privateState) else { return false }
         let left = display.frame.minX + 8
         let right = display.frame.maxX - 8
@@ -774,9 +926,9 @@ private final class PocketController: NSObject, NSApplicationDelegate {
             : min(max(target.frame.midX, left), right)
         let endX = keepVisible
             ? min(max(target.frame.maxX + 6, left), right)
-            : min(max(target.frame.minX + target.frame.width * 0.25, left), right)
-        let start = CGPoint(x: startX, y: min(max(item.frame.midY, 8), 40))
-        let end = CGPoint(x: endX, y: min(max(target.frame.midY, 8), 40))
+            : min(max(target.frame.minX + 6, left), right)
+        let start = CGPoint(x: startX, y: item.frame.midY)
+        let end = CGPoint(x: endX, y: target.frame.midY)
         let protected = NSRunningApplication(processIdentifier: item.pid)?.bundleIdentifier == "com.apple.controlcenter"
         func event(_ type: CGEventType, _ point: CGPoint, _ windowID: Int) -> CGEvent? {
             guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { return nil }
@@ -814,21 +966,33 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         guard AXIsProcessTrusted() else { return [] }
         let myPID = ProcessInfo.processInfo.processIdentifier
         var result: [MenuExtra] = []
+        let nativeWindows = CGPreflightScreenCaptureAccess() ? snapshots.nativeWindows() : []
         for app in NSWorkspace.shared.runningApplications where app.processIdentifier != myPID {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetMessagingTimeout(axApp, 0.2)
             var barRef: AnyObject?
             guard AXUIElementCopyAttributeValue(axApp, "AXExtrasMenuBar" as CFString, &barRef) == .success,
-                  let bar = barRef else { continue }
+                  let bar = barRef, CFGetTypeID(bar) == AXUIElementGetTypeID() else { continue }
             var childrenRef: AnyObject?
             guard AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &childrenRef) == .success,
                   let children = childrenRef as? [AXUIElement] else { continue }
+            let identifiers = children.map { child -> String? in
+                var value: AnyObject?
+                guard AXUIElementCopyAttributeValue(child, "AXIdentifier" as CFString, &value) == .success,
+                      let identifier = value as? String, !identifier.isEmpty else { return nil }
+                return identifier
+            }
+            let counts = identifiers.compactMap { $0 }.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
             for (index, child) in children.enumerated() {
                 var positionRef: AnyObject?
                 var sizeRef: AnyObject?
                 guard AXUIElementCopyAttributeValue(child, kAXPositionAttribute as CFString, &positionRef) == .success,
                       AXUIElementCopyAttributeValue(child, kAXSizeAttribute as CFString, &sizeRef) == .success,
-                      let positionRef, let sizeRef else { continue }
+                      let positionRef, let sizeRef,
+                      CFGetTypeID(positionRef) == AXValueGetTypeID(),
+                      CFGetTypeID(sizeRef) == AXValueGetTypeID(),
+                      AXValueGetType(positionRef as! AXValue) == .cgPoint,
+                      AXValueGetType(sizeRef as! AXValue) == .cgSize else { continue }
                 var origin = CGPoint.zero
                 var size = CGSize.zero
                 guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
@@ -836,29 +1000,69 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 var titleRef: AnyObject?
                 AXUIElementCopyAttributeValue(child, kAXTitleAttribute as CFString, &titleRef)
                 let name = app.localizedName ?? "Menu bar item"
-                let title = (titleRef as? String).flatMap { $0.isEmpty ? nil : $0 } ?? name
+                var title = (titleRef as? String).flatMap { $0.isEmpty ? nil : $0 } ?? name
                 let identity = app.bundleIdentifier ?? name
-                result.append(MenuExtra(element: child, pid: app.processIdentifier, name: name, title: title, id: "\(identity):\(index)", frame: CGRect(origin: origin, size: size)))
+                let frame = CGRect(origin: origin, size: size)
+                let windowID = IconSnapshots.matchedWindow(frame: frame, windows: nativeWindows)?.id
+                let identifier = identifiers[index]
+                if let identifier, identifier.hasPrefix("com.apple.menuextra.") {
+                    let nativeTitles = ["battery": "Battery", "clock": "Clock", "wifi": "Wi-Fi",
+                        "controlcenter": "Control Center", "now-playing": "Now Playing", "audiovideo": "Audio and video"]
+                    title = nativeTitles[String(identifier.dropFirst("com.apple.menuextra.".count))] ?? title
+                }
+                let id = IconSnapshots.itemIdentity(bundle: identity, index: index, identifier: identifier,
+                    unique: identifier.map { counts[$0] == 1 } ?? false, windowID: windowID)
+                let legacyID = "\(identity):\(index)"
+                var pinned = defaults.stringArray(forKey: "pinnedExtras") ?? []
+                if id != legacyID, pinned.contains(legacyID) {
+                    pinned.removeAll { $0 == legacyID }
+                    if !pinned.contains(id) { pinned.append(id) }
+                    defaults.set(pinned, forKey: "pinnedExtras")
+                }
+                result.append(MenuExtra(element: child, pid: app.processIdentifier, name: name, title: title, id: id, frame: frame))
             }
         }
-        return result.sorted { $0.frame.minX < $1.frame.minX }
+        let grouped = Dictionary(grouping: result, by: \.id)
+        var seen = Set<String>()
+        return result.compactMap { item -> MenuExtra? in
+            let id = (Set(grouped[item.id, default: []].map(\.pid)).count > 1)
+                ? "\(item.id):pid:\(item.pid)" : item.id
+            guard seen.insert(id).inserted else { return nil }
+            return MenuExtra(element: item.element, pid: item.pid, name: item.name, title: item.title, id: id, frame: item.frame)
+        }.sorted { $0.frame.minX < $1.frame.minX }
     }
 
     // Keep permission changes separate from inventory refreshes: denying or
     // revoking access must never leave native icons hidden behind our divider.
     private func reconcileAccessibility() {
         let trusted = AXIsProcessTrusted()
+        let screenTrusted = CGPreflightScreenCaptureAccess()
+        let screenChanged = screenTrusted != screenCaptureReady
+        screenCaptureReady = screenTrusted
+        if !screenTrusted {
+            captureReady = false
+            expand(); closePanel()
+        }
         updateAccessLabel()
-        guard trusted != accessibilityReady else {
+        if trusted && screenTrusted && !defaults.bool(forKey: "hasCompletedSetup") {
+            defaults.set(true, forKey: "hasCompletedSetup")
+            showSettings()
+        }
+        guard trusted != accessibilityReady || (trusted && screenChanged) else {
             if !trusted { expand() }
             return
         }
         accessibilityReady = trusted
         if trusted {
             permissionWindow?.orderOut(nil)
-            collapse()
             refreshCache()
-            Task { @MainActor in await restorePinnedExtras() }
+            if CGPreflightScreenCaptureAccess() {
+                let items = allExtras()
+                if !items.isEmpty && items.allSatisfy({ glyphs[$0.id] != nil && capturedPIDs[$0.id] == $0.pid }) {
+                    captureReady = true; collapse()
+                    if !restoredPinned { restoredPinned = true; Task { @MainActor in await restorePinnedExtras() } }
+                } else { Task { @MainActor in await captureIcons() } }
+            } else { showCaptureSetup() }
             toggle.button?.toolTip = "Open pocket. Drag a visible menu bar icon here to hide it."
         } else {
             expand()
@@ -883,7 +1087,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
             let heading = NSTextField(labelWithString: "Allow Accessibility to use BarPocket")
             heading.font = .systemFont(ofSize: 17, weight: .semibold)
             let detail = NSTextField(wrappingLabelWithString: "BarPocket needs permission to find, open, and move your menu bar icons. Until you enable it, your icons stay visible and the pocket stays inactive.")
-            let steps = NSTextField(wrappingLabelWithString: "1. Open Accessibility settings below.\n2. Turn on BarPocket in the list.\nIf it is missing, click + and select this app. Use Show BarPocket in Finder below to locate the right copy.\n\nBarPocket starts automatically once access is enabled. It does not record your screen.")
+            let steps = NSTextField(wrappingLabelWithString: "1. Open Accessibility settings below.\n2. Turn on BarPocket in the list.\nIf it is missing, click + and select this app. Use Show BarPocket in Finder below to locate the right copy.\n\nBarPocket starts automatically once access is enabled. It does not record video or audio.")
             steps.textColor = .secondaryLabelColor
             let button = NSButton(title: "Open Accessibility Settings…", target: self, action: #selector(openAccessibilitySettings))
             button.bezelStyle = .rounded
@@ -906,7 +1110,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func updateAccessLabel() {
-        accessLabel?.stringValue = AXIsProcessTrusted() ? "Access enabled" : "Access required"
+        accessLabel?.stringValue = !AXIsProcessTrusted() ? "Accessibility required" : (CGPreflightScreenCaptureAccess() ? "Accessibility and icon images enabled" : "Icon image access required")
     }
 
     @objc private func showSettings() {
@@ -971,9 +1175,10 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let manage = NSButton(title: "Manage icons…", target: self, action: #selector(showManageWindow))
         let show = NSButton(title: "Open pocket", target: self, action: #selector(showPanelFromMenu))
         let arrange = NSButton(title: "Expand menu bar", target: self, action: #selector(toggleNativeBar))
-        let actions = NSStackView(views: [manage, show, arrange]); actions.spacing = 8
+        let refresh = NSButton(title: "Refresh icons", target: self, action: #selector(refreshIcons))
+        let actions = NSStackView(views: [manage, show, arrange, refresh]); actions.spacing = 8
         let items = card("YOUR MENU BAR", [text("Choose what stays visible and what goes in the pocket.", secondary: true), actions])
-        let access = text(AXIsProcessTrusted() ? "Access enabled" : "Access required", size: 12, weight: .medium)
+        let access = text(!AXIsProcessTrusted() ? "Accessibility required" : (CGPreflightScreenCaptureAccess() ? "Accessibility and icon images enabled" : "Icon image access required"), size: 12, weight: .medium)
         accessLabel = access
         let accessButton = NSButton(title: "Open System Settings…", target: self, action: #selector(openAccessibilitySettings))
         let permissions = card("ACCESSIBILITY", [access, text("Allow BarPocket to move and open menu bar items.", size: 11, secondary: true), accessButton])
@@ -1088,7 +1293,7 @@ private func activateExistingInstance(legacyOnly: Bool = false) -> Bool {
     guard let existing = NSWorkspace.shared.runningApplications.first(where: { running in
         guard running.processIdentifier != currentPID,
               !running.isTerminated,
-              running.bundleIdentifier?.hasPrefix("com.abdul.barpocket") == true ||
+              running.bundleIdentifier == "com.abdul.barpocket" ||
               running.executableURL?.lastPathComponent == "BarPocket" else { return false }
         if legacyOnly, let url = running.bundleURL,
            let build = Bundle(url: url)?.infoDictionary?["CFBundleVersion"] as? String,

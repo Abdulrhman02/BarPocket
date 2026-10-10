@@ -18,7 +18,7 @@
 </p>
 
 > [!NOTE]
-> BarPocket is an early public source release. There is no notarized download yet; build it on your Mac using the steps below.
+> BarPocket is an experimental, MIT-licensed public source release. There is no notarized download yet; build it on your Mac using the steps below.
 
 ## The short version
 
@@ -28,11 +28,11 @@ The menu bar is prime real estate. BarPocket puts less-used items behind a slim 
 | --- | --- |
 | A little breathing room | Items left of its divider stay out of the visible menu bar. |
 | A quick peek | Click or hover over BarPocket to open the pocket. |
-| An icon that has earned a permanent seat | Drag it from the pocket to the menu bar. |
-| An icon that can go back in its coat closet | Drag it onto BarPocket or the open pocket. |
-| A stubborn app that grabs the drag | Use **Manage icons…** in Settings. |
+| Keep an item visible | Drag it from the pocket to the menu bar. |
+| Put an item back | Drag it onto BarPocket or the open pocket. |
+| An app that intercepts dragging | Use **Manage icons…** in Settings. |
 
-No subscription, no account, and no screen recording.
+No subscription or account. Brief local still captures supply the real menu bar artwork; no video or audio stream runs.
 
 ## What's in the pocket?
 
@@ -48,7 +48,7 @@ No subscription, no account, and no screen recording.
 [![BarPocket drag-and-drop preview](docs/media/barpocket-preview.gif)](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4)
 
 [Watch or download the 42-second demo](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4).
-The video uses animated interactions and actual native settings captures. Its sample icons illustrate cached glyphs; fresh items can appear as initials. The divider is omitted from the illustration for clarity; the real app uses a divider to hide native items.
+**This is the earlier v0.7 illustration; its final requirements card predates v0.8. Use the macOS 14+ and two-permission requirements below. An updated demo is in review.** The video uses animated interactions and actual native settings captures. Its sample icons illustrate the pocket; the current app captures real menu bar artwork instead of showing initials. The divider is omitted from the illustration for clarity; the real app uses a divider to hide native items.
 
 ## Settings
 
@@ -63,9 +63,9 @@ Settings start with General: native switches, short explanations, and light/dark
 
 ### Requirements
 
-- macOS 13 Ventura or later. Development testing has been on Apple silicon with macOS 26.6.2.
+- macOS 14 Sonoma or later for still icon capture. Development testing has been on Apple silicon with macOS 26.5.2.
 - Xcode or the Xcode Command Line Tools.
-- Accessibility access for BarPocket.
+- Accessibility and Screen Recording access for BarPocket (macOS uses that name even for still images).
 
 ### Build from source
 
@@ -90,8 +90,9 @@ There is no signed and notarized public binary yet. A Developer ID signature and
 
 1. Open BarPocket. A **Set up BarPocket** window explains Accessibility access. Your native menu bar icons remain visible; hiding and pocket interactions stay inactive.
 2. Click **Open Accessibility Settings…**. This requests access from macOS and opens **System Settings → Privacy & Security → Accessibility**.
-3. Enable the BarPocket copy you are launching. If it is missing from the list, click **+** and select the app. **Show BarPocket in Finder** in setup reveals the exact running copy. If macOS asks to quit and reopen it, follow that prompt. Otherwise BarPocket detects access automatically within about a second and activates the pocket.
-4. Click its menu bar icon to see the hidden items below the bar. Before permission is enabled, clicking returns to setup instead of opening general Settings.
+3. Enable the BarPocket copy you are launching. If it is missing from the list, click **+** and select the app. **Show BarPocket in Finder** in setup reveals the exact running copy. If macOS asks to quit and reopen it, follow that prompt. Otherwise BarPocket detects the change automatically. The pocket activates once both permissions and usable icon images are available.
+4. Allow **icon images** when prompted, then enable BarPocket in **Screen & System Audio Recording**. Follow macOS’s Quit & Reopen prompt. BarPocket captures native menu bar window artwork at Retina resolution. It refreshes status images every three seconds while the pocket is open. That periodic status refresh stops when it closes.
+5. Click its menu bar icon to see the hidden items below the bar. Before permission is enabled, clicking returns to setup instead of opening general Settings.
 
 <p align="center"><img src="docs/images/accessibility-setup.png" width="440" alt="BarPocket first-launch Accessibility setup"></p>
 
@@ -115,9 +116,11 @@ Settings also has the hover, automatic closing, and launch-at-login switches. Ba
 
 ## Privacy, without the mystery
 
-BarPocket asks for **Accessibility** to discover other apps' menu bar items and click or move them. It does **not** record your screen, use your microphone, send analytics, or call a server. Your visible-item choices and any old glyph cache live in local macOS app preferences.
+BarPocket uses **Accessibility** to discover, click, and move native menu bar items. **Screen Recording** permission is used for brief still captures of their icon rectangles. It does not create a video stream, capture audio, use your microphone, send analytics, or upload images.
 
-The current version does not grab new menu bar artwork from the screen. If an older BarPocket version saved an item's original glyph on this Mac, it can reuse that glyph. Otherwise the pocket shows initials. It never swaps in the app's Dock icon and pretends that is the menu bar icon.
+Images and their owner-process identities are cached locally in macOS preferences. New or reopened apps receive a new still capture; closed apps are removed from the pocket. Light/dark appearance or display changes trigger a refresh. Unchanged items reuse their images, including when BarPocket restarts while those apps are still running. While the pocket is open, icon stills refresh every three seconds so coloured badges, battery state, and other status changes appear automatically. Opening the pocket also refreshes immediately. This is sampled status, not frame-by-frame animation; changes faster than three seconds may be skipped. The periodic status refresh stops when the pocket closes. New/reopened items, appearance/display changes, and initial image recovery can still need a capture while closed. A failed initial capture gets at most three attempts, with 30 seconds between retries; the group stays visible. **Refresh icons** starts a fresh attempt budget.
+
+Native icon-window captures preserve transparent backgrounds and coloured status badges, including items outside the visible menu bar. The pocket uses a macOS popover surface and preserves the artwork’s native menu bar point size. Monochrome artwork uses native light/dark tinting; dark neutral ink in mixed-colour artwork is adjusted for dark material while coloured badges and alpha remain intact. No wallpaper screenshot or temporary rearrangement is needed. If native capture fails, the group stays visible; initials are never substituted. This relies on undocumented WindowServer window discovery and a deprecated still-image API, because the ScreenCaptureKit shareable window list did not expose offscreen status windows in our tests. Future macOS changes may affect compatibility.
 
 ## Honest fine print
 
@@ -133,6 +136,7 @@ If an item's menu cannot be detected, BarPocket may leave its native item visibl
 | `build.sh` | A one-command local build. |
 | `BarPocket.icns`, `icon-1024.png` | The graphite app icon and its source artwork. |
 | `PocketLight.png`, `PocketDark.png` | Preserved monochrome brand artwork. |
+| `IconSnapshots.swift` | Native transparent stills, artwork sizing, badge preservation and blank-image rejection. |
 | `SingleInstance.swift` | Shared per-user process lock. |
 | `docs/media/` | Full landscape demo and animated README preview. |
 | `generate_icon.swift` | Script that regenerates the PNG artwork. |
@@ -146,8 +150,18 @@ Found a bug or have an idea? [Open an issue](https://github.com/Abdulrhman02/Bar
 ```sh
 python3 Tests/test_single_instance.py
 python3 Tests/test_accessibility_flow.py
+python3 Tests/test_icon_snapshots.py
+python3 Tests/test_layout_and_drag.py
 ```
 
 This compiles the production process lock, verifies that a second process cannot acquire it, then checks that termination releases it for the next launch.
 
 The Accessibility check exercises denied access, activation after granting access, and restoration after revoking it using a simulated trust result. It does not grant system permissions or move real menu bar items.
+
+Right-to-left interfaces keep the icon row in the native menu bar’s physical order. Drag targets use the native window coordinates on the item’s display, including displays above the laptop screen.
+
+## License and release scope
+
+[MIT](LICENSE), copyright Abdulrahman Ali Alghamdi. Version 0.8 is an experimental source release, not a notarized installer. The [release audit](docs/RELEASE_AUDIT.md) lists the checks, fixes, and untested configurations.
+
+Item identities prefer a unique Accessibility identifier, then a native window ID. This prevents a reordered app list from reusing a different item’s artwork. Apps without a stable identifier can receive new window IDs when restarted; their saved pin may need to be set again.

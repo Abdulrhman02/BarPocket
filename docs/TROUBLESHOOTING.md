@@ -2,13 +2,13 @@
 
 [← Back to BarPocket](../README.md)
 
-Menu bar items belong to other apps, and macOS gives each of them a slightly different personality. Here are the fixes that are worth trying before declaring an icon haunted.
+Menu bar items belong to other apps, and macOS gives each of them a slightly different personality. Here are the fixes that are worth trying before reporting a bug.
 
 ## Multiple BarPocket icons or an older copy keeps opening
 
-Version 0.7 permits only one running BarPocket process per macOS user, including copies launched from different folders or preview bundle IDs. Opening a second copy activates the existing instance and exits before creating status items.
+Version 0.7 and later permit only one running BarPocket process per macOS user, including copies launched from different folders or preview bundle IDs. Opening a second copy activates the existing instance and exits before creating status items.
 
-Older versions do not have this protection. Quit every older copy once before starting 0.7, and keep one app in a stable location such as `/Applications/BarPocket.app`. Each instance owns a control and a divider, so multiple old copies can produce several menu bar items. The app normally restores hidden items when it quits.
+Older versions do not have this protection. Quit every older copy once before starting the current version, and keep one app in a stable location such as `/Applications/BarPocket.app`. Each instance owns a control and a divider, so multiple old copies can produce several menu bar items. The app normally restores hidden items when it quits.
 
 The process lock is released automatically on exit or a crash. A leftover `instance.lock` file is harmless; do not delete it while BarPocket is running.
 
@@ -47,9 +47,11 @@ Moving an item relies on macOS accepting a Command-drag of that app's native sta
 
 Some apps open menus or windows that macOS does not expose in a way BarPocket can reliably recognize. In that case, BarPocket leaves the native icon visible so you can click it directly. When you are done, move it back with **Manage icons…** or drag it onto BarPocket.
 
-## Icons show initials instead of their usual artwork
+## An icon image is missing or stale
 
-This is expected on a fresh install. BarPocket does not take screenshots of the menu bar. It reuses original glyphs only if an earlier version saved them locally; otherwise it shows initials. It does not replace them with the app's Dock icon.
+Enable both Accessibility and **Screen & System Audio Recording** for the installed BarPocket copy. Quit before moving the app; moving a running copy leaves its process at the old path. Rebuilt ad hoc copies may need their permission entries renewed; a consistent signing certificate avoids a new identity on every build.
+
+Choose **Refresh icons** in Settings or the context menu. A new app or reopened app is detected automatically; status badges and battery artwork refresh every three seconds while the pocket is open. Faster animation frames may be skipped. Periodic status capture stops while closed; new/reopened/appearance captures and up to three initial recovery attempts can still occur. Recovery attempts are 30 seconds apart. Capture failures leave native icons visible and provide a tooltip explaining the failure. The app never shows two-letter placeholders.
 
 ## The pocket closes too quickly
 
@@ -68,8 +70,12 @@ Run `xcode-select --install` if the Xcode Command Line Tools are missing. Then r
 [Open an issue](https://github.com/Abdulrhman02/BarPocket/issues) with:
 
 - macOS version and Mac model;
-- BarPocket version (`0.7.1` for this source release);
+- BarPocket version (`0.8` for this experimental source release);
 - the app that owns the affected menu bar item;
 - what you clicked or dragged, what happened, and what you expected.
 
 Screenshots help, but please check them for private content first.
+
+## A saved pin changes after an app restart
+
+BarPocket prefers stable Accessibility identifiers. Apps that do not supply one are identified by their native window ID; macOS may assign a new ID when that app restarts. Set Keep visible again in Manage icons. Battery, Wi-Fi and other supported system items use stable identifiers instead of list indexes.
