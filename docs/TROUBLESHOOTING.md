@@ -4,6 +4,14 @@
 
 Menu bar items belong to other apps, and macOS gives each of them a slightly different personality. Here are the fixes that are worth trying before declaring an icon haunted.
 
+## Multiple BarPocket icons or an older copy keeps opening
+
+Version 0.7 permits only one running BarPocket process per macOS user, including copies launched from different folders or preview bundle IDs. Opening a second copy activates the existing instance and exits before creating status items.
+
+Older versions do not have this protection. Quit every older copy once before starting 0.7, and keep one app in a stable location such as `/Applications/BarPocket.app`. Each instance owns a control and a divider, so multiple old copies can produce several menu bar items. The app normally restores hidden items when it quits.
+
+The process lock is released automatically on exit or a crash. A leftover `instance.lock` file is harmless; do not delete it while BarPocket is running.
+
 ## Accessibility is on, but BarPocket cannot see icons
 
 1. Quit BarPocket. If you have more than one copy running, quit all of them.
@@ -39,7 +47,7 @@ This is expected on a fresh install. BarPocket does not take screenshots of the 
 
 ## The pocket closes too quickly
 
-Open **Settings…** from BarPocket's right-click menu and turn off **Close pocket when pointer leaves**. You can also turn off **Open pocket on hover** if you prefer click-only behavior.
+Open **Settings…** from BarPocket's right-click menu and turn off **Close automatically**. You can also turn off **Open on hover** if you prefer click-only behavior.
 
 ## Launch at login did not stick
 
@@ -54,7 +62,7 @@ Run `xcode-select --install` if the Xcode Command Line Tools are missing. Then r
 [Open an issue](https://github.com/Abdulrhman02/BarPocket/issues) with:
 
 - macOS version and Mac model;
-- BarPocket version (`0.6` for this source release);
+- BarPocket version (`0.7` for this source release);
 - the app that owns the affected menu bar item;
 - what you clicked or dragged, what happened, and what you expected.
 

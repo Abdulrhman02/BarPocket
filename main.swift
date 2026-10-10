@@ -3,24 +3,6 @@ import ApplicationServices
 import Quartz
 import ServiceManagement
 
-private final class PocketBrandImageView: NSImageView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        refreshArtwork()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        refreshArtwork()
-    }
-
-    private func refreshArtwork() {
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        guard let path = Bundle.main.path(forResource: dark ? "PocketDark" : "PocketLight", ofType: "png") else { return }
-        image = NSImage(contentsOfFile: path)
-    }
-}
-
 private struct MenuExtra {
     let element: AXUIElement
     let pid: pid_t
@@ -859,7 +841,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func makeSettingsWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 530), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "BarPocket"
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
@@ -896,15 +878,6 @@ private final class PocketController: NSObject, NSApplicationDelegate {
             ])
             return box
         }
-        let heading = text("BarPocket", size: 25)
-        heading.font = NSFont(name: "Georgia", size: 25) ?? .systemFont(ofSize: 25)
-        let icon = PocketBrandImageView()
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.widthAnchor.constraint(equalToConstant: 52).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 52).isActive = true
-        let intro = NSStackView(views: [heading, text("MENU BAR UTILITY", size: 9, weight: .medium, secondary: true)])
-        intro.orientation = .vertical; intro.alignment = .leading; intro.spacing = 5
-        let header = NSStackView(views: [icon, intro]); header.spacing = 13
         func switchRow(_ title: String, _ detail: String, _ enabled: Bool, _ selector: Selector) -> NSView {
             let control = NSSwitch(); control.target = self; control.action = selector; control.state = enabled ? .on : .off
             control.setAccessibilityLabel(title)
@@ -929,7 +902,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         let accessButton = NSButton(title: "Open System Settings…", target: self, action: #selector(openAccessibilitySettings))
         let permissions = card("ACCESSIBILITY", [access, text("Allow BarPocket to move and open menu bar items.", size: 11, secondary: true), accessButton])
         let privacy = text("Works locally on your Mac. No account needed.", size: 11, secondary: true)
-        let stack = NSStackView(views: [header, behavior, items, permissions, privacy])
+        let stack = NSStackView(views: [behavior, items, permissions, privacy])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
@@ -1029,11 +1002,47 @@ private final class PocketController: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
+@discardableResult
+private func activateExistingInstance(legacyOnly: Bool = false) -> Bool {
+    let currentPID = ProcessInfo.processInfo.processIdentifier
+    guard let existing = NSWorkspace.shared.runningApplications.first(where: { running in
+        guard running.processIdentifier != currentPID,
+              !running.isTerminated,
+              running.bundleIdentifier?.hasPrefix("com.abdul.barpocket") == true ||
+              running.executableURL?.lastPathComponent == "BarPocket" else { return false }
+        if legacyOnly, let url = running.bundleURL,
+           let build = Bundle(url: url)?.infoDictionary?["CFBundleVersion"] as? String,
+           let number = Int(build), number >= 7 {
+            // New builds arbitrate through the lock, including simultaneous launches.
+            return false
+        }
+        return true
+    }) else { return false }
+    existing.activate(options: [.activateIgnoringOtherApps])
+    return true
+}
+
+@MainActor
 private func startApp() {
+    let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("BarPocket", isDirectory: true)
+    let instanceLock: SingleInstanceLock
+    do {
+        guard let acquired = try SingleInstanceLock.acquire(at: directory) else {
+            activateExistingInstance()
+            return
+        }
+        instanceLock = acquired
+    } catch {
+        NSLog("BarPocket cannot acquire its single-instance lock: %@", String(describing: error))
+        return
+    }
+    // Older builds do not hold a lock. Do not add another status item beside one.
+    if activateExistingInstance(legacyOnly: true) { return }
     let app = NSApplication.shared
     let controller = PocketController()
     app.delegate = controller
-    app.run()
+    withExtendedLifetime(instanceLock) { app.run() }
 }
 
 MainActor.assumeIsolated { startApp() }

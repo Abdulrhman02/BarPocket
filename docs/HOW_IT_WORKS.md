@@ -31,3 +31,7 @@ Choices and any existing glyph cache are stored in local app preferences. The ap
 ## Where the edges are
 
 System-controlled items and apps with unusual menu implementations can resist discovery, moving, or activation. macOS updates can also change status item behavior. The fallback is **Manage icons…** or **Expand menu bar temporarily** from BarPocket's right-click menu. A normal quit restores hidden items to the native bar.
+
+## One running instance
+
+Before creating status items, BarPocket takes an exclusive nonblocking file lock in the current user’s Application Support/BarPocket directory. All app copies and preview bundle identifiers share this path. A second process activates the existing app and exits. Kernel ownership releases the lock when the process exits, even after a crash. A startup check also recognizes older running BarPocket builds that do not use the lock.

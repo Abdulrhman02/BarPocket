@@ -43,9 +43,16 @@ No subscription, no account, and no screen recording.
 - **A few useful switches.** Choose hover opening, automatic closing, and launch at login.
 - **A tidy exit.** A normal quit restores the hidden items to the menu bar.
 
+## Watch the demo
+
+[![BarPocket drag-and-drop preview](docs/media/barpocket-preview.gif)](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4)
+
+[Watch or download the 42-second demo](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4).
+The video uses animated interactions and actual native settings captures. Its sample icons illustrate cached glyphs; fresh items can appear as initials. The divider is omitted from the illustration for clarity; the real app uses a divider to hide native items.
+
 ## Settings
 
-Native macOS controls, short explanations, and a monochrome settings logo that follows your system appearance.
+Settings start with General: native switches, short explanations, and light/dark surfaces that follow your system appearance.
 
 <p align="center">
   <img src="docs/images/settings-light.png" width="400" alt="BarPocket settings in light appearance">
@@ -100,7 +107,7 @@ If the switch says “on” but BarPocket still cannot see items, [try the permi
 | Right-click BarPocket | Open Settings, show hidden items, expand temporarily, or quit. |
 | Open **Settings → Manage icons…** | Move an item when normal dragging gets intercepted. |
 
-Settings also has the hover, automatic closing, and launch-at-login switches.
+Settings also has the hover, automatic closing, and launch-at-login switches. BarPocket allows one running instance per macOS user. Launching another copy activates the existing app instead of adding more menu bar items.
 
 ## Privacy, without the mystery
 
@@ -121,9 +128,19 @@ If an item's menu cannot be detected, BarPocket may leave its native item visibl
 | `main.swift` | The native AppKit app. |
 | `build.sh` | A one-command local build. |
 | `BarPocket.icns`, `icon-1024.png` | The graphite app icon and its source artwork. |
-| `PocketLight.png`, `PocketDark.png` | Appearance variants for the settings logo. |
+| `PocketLight.png`, `PocketDark.png` | Preserved monochrome brand artwork. |
+| `SingleInstance.swift` | Shared per-user process lock. |
+| `docs/media/` | Full landscape demo and animated README preview. |
 | `generate_icon.swift` | Script that regenerates the PNG artwork. |
 | `docs/` | Behavior notes and fixes for common problems. |
 | `dist/` | Your local build output; ignored by Git. |
 
 Found a bug or have an idea? [Open an issue](https://github.com/Abdulrhman02/BarPocket/issues) with your macOS version, the affected app, and a short reproduction. [Contributions are welcome](CONTRIBUTING.md). Please check screenshots for private menu bar or desktop content before attaching them.
+
+## Development checks
+
+```sh
+python3 Tests/test_single_instance.py
+```
+
+This compiles the production process lock, verifies that a second process cannot acquire it, then checks that termination releases it for the next launch.

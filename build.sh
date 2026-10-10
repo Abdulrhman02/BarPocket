@@ -17,7 +17,7 @@ trap 'rm -r "$module_cache_dir"' EXIT
 /usr/bin/xcrun swiftc -O -swift-version 5 -target "${target_arch}-apple-macosx13.0" \
   -module-cache-path "$module_cache_dir" \
   -framework AppKit -framework ApplicationServices -framework ServiceManagement \
-  "$source_dir/main.swift" -o "$app_dir/Contents/MacOS/BarPocket"
+  "$source_dir/main.swift" "$source_dir/SingleInstance.swift" -o "$app_dir/Contents/MacOS/BarPocket"
 cp "$source_dir/BarPocket.icns" "$app_dir/Contents/Resources/BarPocket.icns"
 cp "$source_dir/PocketLight.png" "$app_dir/Contents/Resources/PocketLight.png"
 cp "$source_dir/PocketDark.png" "$app_dir/Contents/Resources/PocketDark.png"
@@ -31,8 +31,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>BarPocket</string>
 <key>CFBundleIconFile</key><string>BarPocket</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6</string>
-<key>CFBundleVersion</key><string>6</string>
+<key>CFBundleShortVersionString</key><string>0.7</string>
+<key>CFBundleVersion</key><string>7</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
