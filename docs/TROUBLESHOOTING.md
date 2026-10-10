@@ -12,6 +12,12 @@ Older versions do not have this protection. Quit every older copy once before st
 
 The process lock is released automatically on exit or a crash. A leftover `instance.lock` file is harmless; do not delete it while BarPocket is running.
 
+## Clicking BarPocket opens setup instead of icons
+
+Accessibility is not enabled for the running copy. BarPocket deliberately leaves icons visible until it has access. Click **Open Accessibility Settings…** in setup, then enable BarPocket. The button requests access and opens the correct macOS page.
+
+If it is still missing, use **Show BarPocket in Finder** in setup, then the **+** button in Accessibility to select that exact app. Permission may need to be renewed after rebuilding or moving an ad hoc signed app.
+
 ## Accessibility is on, but BarPocket cannot see icons
 
 1. Quit BarPocket. If you have more than one copy running, quit all of them.
@@ -62,7 +68,7 @@ Run `xcode-select --install` if the Xcode Command Line Tools are missing. Then r
 [Open an issue](https://github.com/Abdulrhman02/BarPocket/issues) with:
 
 - macOS version and Mac model;
-- BarPocket version (`0.7` for this source release);
+- BarPocket version (`0.7.1` for this source release);
 - the app that owns the affected menu bar item;
 - what you clicked or dragged, what happened, and what you expected.
 

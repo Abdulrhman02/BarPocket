@@ -88,10 +88,14 @@ There is no signed and notarized public binary yet. A Developer ID signature and
 
 ### First launch
 
-1. Open BarPocket. Its Settings window explains the permission it needs.
-2. In **System Settings → Privacy & Security → Accessibility**, enable the BarPocket copy you are launching.
-3. Quit and reopen BarPocket if the new permission does not take effect right away.
-4. Click its menu bar icon. Your pocket should appear below the bar.
+1. Open BarPocket. A **Set up BarPocket** window explains Accessibility access. Your native menu bar icons remain visible; hiding and pocket interactions stay inactive.
+2. Click **Open Accessibility Settings…**. This requests access from macOS and opens **System Settings → Privacy & Security → Accessibility**.
+3. Enable the BarPocket copy you are launching. If it is missing from the list, click **+** and select the app. **Show BarPocket in Finder** in setup reveals the exact running copy. If macOS asks to quit and reopen it, follow that prompt. Otherwise BarPocket detects access automatically within about a second and activates the pocket.
+4. Click its menu bar icon to see the hidden items below the bar. Before permission is enabled, clicking returns to setup instead of opening general Settings.
+
+<p align="center"><img src="docs/images/accessibility-setup.png" width="440" alt="BarPocket first-launch Accessibility setup"></p>
+
+If you remove Accessibility access later, BarPocket closes the pocket and restores the native icons to view. Closing setup without granting access leaves the app inactive and the icons visible.
 
 If the switch says “on” but BarPocket still cannot see items, [try the permission reset steps](docs/TROUBLESHOOTING.md#accessibility-is-on-but-barpocket-cannot-see-icons).
 
@@ -141,6 +145,9 @@ Found a bug or have an idea? [Open an issue](https://github.com/Abdulrhman02/Bar
 
 ```sh
 python3 Tests/test_single_instance.py
+python3 Tests/test_accessibility_flow.py
 ```
 
 This compiles the production process lock, verifies that a second process cannot acquire it, then checks that termination releases it for the next launch.
+
+The Accessibility check exercises denied access, activation after granting access, and restoration after revoking it using a simulated trust result. It does not grant system permissions or move real menu bar items.

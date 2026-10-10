@@ -19,7 +19,10 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     private var panel: NSPanel?
     private var settingsWindow: NSWindow?
     private var manageWindow: NSWindow?
-    private var isCollapsed = true
+    private var isCollapsed = false
+    private var accessibilityReady = false
+    private var permissionWindow: NSWindow?
+    private var permissionTimer: Timer?
     private var isPanelOpen = false
     private var activatingID: String?
     private var hoverTimer: Timer?
@@ -55,9 +58,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         loadGlyphCache()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
-            collapse()
-            refreshCache()
-            await restorePinnedExtras()
+            reconcileAccessibility()
         }
         installMouseMonitor()
         NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -67,9 +68,10 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 self?.updateAccessLabel()
             }
         }
-        if !AXIsProcessTrusted() {
-            showSettings()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.reconcileAccessibility() }
         }
+        if !AXIsProcessTrusted() { showPermissionSetup() }
     }
 
     private func configureStatusItems() {
@@ -93,7 +95,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showSettings()
+        if AXIsProcessTrusted() { showSettings() } else { showPermissionSetup() }
         return true
     }
 
@@ -124,6 +126,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func collapse() {
+        guard AXIsProcessTrusted() else { expand(); return }
         divider.length = collapsedLength
         isCollapsed = true
     }
@@ -146,7 +149,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
 
     @objc private func dividerClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp { showContextMenu(from: divider) }
-        else { isCollapsed ? expand() : collapse() }
+        else { toggleNativeBar() }
     }
 
     private func showContextMenu(from item: NSStatusItem) {
@@ -170,7 +173,10 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPanelFromMenu() { showPanel() }
-    @objc private func toggleNativeBar() { isCollapsed ? expand() : collapse() }
+    @objc private func toggleNativeBar() {
+        guard AXIsProcessTrusted() else { expand(); showPermissionSetup(); return }
+        isCollapsed ? expand() : collapse()
+    }
     @objc private func quitApp() { NSApp.terminate(nil) }
 
     private func installMouseMonitor() {
@@ -196,6 +202,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func mouseMoved() {
+        guard AXIsProcessTrusted() else { return }
         guard let buttonFrame = toggle.button?.window?.frame else { return }
         let point = NSEvent.mouseLocation
         let hoverZone = buttonFrame.insetBy(dx: -10, dy: -9)
@@ -265,6 +272,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func nativeMouseDown(_ event: NSEvent) {
+        guard AXIsProcessTrusted() else { return }
         nativeDragCandidate = nil
         nativeDragStart = nil
         guard menuBarDropZoneContains(screenPoint(for: event)),
@@ -278,6 +286,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func nativeMouseDragged(_ event: NSEvent) {
+        guard AXIsProcessTrusted() else { return }
         guard let extra = nativeDragCandidate, let start = nativeDragStart else { return }
         let point = screenPoint(for: event)
         if !nativeDragActive {
@@ -295,6 +304,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func nativeMouseUp(_ event: NSEvent) {
+        guard AXIsProcessTrusted() else { return }
         guard let extra = nativeDragCandidate else { return }
         let shouldHide = nativeDragActive && pocketDropZoneContains(screenPoint(for: event))
         defaults.set("native up \(extra.name) accepted=\(shouldHide)", forKey: "dragDiagnostics")
@@ -417,7 +427,8 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     private func showPanel() {
         guard activatingID == nil else { return }
         guard AXIsProcessTrusted() else {
-            showSettings()
+            expand()
+            showPermissionSetup()
             return
         }
         closeTimer?.invalidate(); closeTimer = nil
@@ -568,6 +579,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
                 }
             }
             if popups.isEmpty && interfaceWindowIDs(pid: extra.pid).subtracting(beforeWindows).isEmpty {
+                guard AXIsProcessTrusted() else { return }
                 axResult = AXUIElementPerformAction(visible.element, kAXPressAction as CFString)
                 for _ in 0..<10 where popups.isEmpty {
                     try? await Task.sleep(for: .milliseconds(100))
@@ -635,6 +647,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func clickVisibleExtra(_ extra: MenuExtra) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
         let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
         let candidate = windows.compactMap { info -> CGRect? in
             guard let layer = info[kCGWindowLayer as String] as? Int,
@@ -734,6 +747,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func postTargetedCommandDrag(extra: MenuExtra, keepVisible: Bool) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
         guard let dividerFrame = divider.button?.window?.frame else { return false }
         let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
         let records: [(id: Int, pid: pid_t, layer: Int, frame: CGRect)] = windows.compactMap { info in
@@ -797,6 +811,7 @@ private final class PocketController: NSObject, NSApplicationDelegate {
     }
 
     private func allExtras() -> [MenuExtra] {
+        guard AXIsProcessTrusted() else { return [] }
         let myPID = ProcessInfo.processInfo.processIdentifier
         var result: [MenuExtra] = []
         for app in NSWorkspace.shared.runningApplications where app.processIdentifier != myPID {
@@ -827,6 +842,67 @@ private final class PocketController: NSObject, NSApplicationDelegate {
             }
         }
         return result.sorted { $0.frame.minX < $1.frame.minX }
+    }
+
+    // Keep permission changes separate from inventory refreshes: denying or
+    // revoking access must never leave native icons hidden behind our divider.
+    private func reconcileAccessibility() {
+        let trusted = AXIsProcessTrusted()
+        updateAccessLabel()
+        guard trusted != accessibilityReady else {
+            if !trusted { expand() }
+            return
+        }
+        accessibilityReady = trusted
+        if trusted {
+            permissionWindow?.orderOut(nil)
+            collapse()
+            refreshCache()
+            Task { @MainActor in await restorePinnedExtras() }
+            toggle.button?.toolTip = "Open pocket. Drag a visible menu bar icon here to hide it."
+        } else {
+            expand()
+            closePanel()
+            manageWindow?.orderOut(nil)
+            hoverTimer?.invalidate(); hoverTimer = nil
+            nativeDragCandidate = nil; nativeDragStart = nil
+            nativeDragActive = false; pocketDragActive = false
+            endDragPreview()
+            hiddenCache = []; extras = []
+            showPermissionSetup()
+        }
+    }
+
+    private func showPermissionSetup() {
+        expand()
+        toggle.button?.toolTip = "Set up Accessibility to use BarPocket. Your icons stay visible until access is enabled."
+        if permissionWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 340), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Set up BarPocket"
+            window.isReleasedWhenClosed = false
+            let heading = NSTextField(labelWithString: "Allow Accessibility to use BarPocket")
+            heading.font = .systemFont(ofSize: 17, weight: .semibold)
+            let detail = NSTextField(wrappingLabelWithString: "BarPocket needs permission to find, open, and move your menu bar icons. Until you enable it, your icons stay visible and the pocket stays inactive.")
+            let steps = NSTextField(wrappingLabelWithString: "1. Open Accessibility settings below.\n2. Turn on BarPocket in the list.\nIf it is missing, click + and select this app. Use Show BarPocket in Finder below to locate the right copy.\n\nBarPocket starts automatically once access is enabled. It does not record your screen.")
+            steps.textColor = .secondaryLabelColor
+            let button = NSButton(title: "Open Accessibility Settings…", target: self, action: #selector(openAccessibilitySettings))
+            button.bezelStyle = .rounded
+            let locate = NSButton(title: "Show BarPocket in Finder", target: self, action: #selector(revealRunningApp))
+            locate.bezelStyle = .rounded
+            let stack = NSStackView(views: [heading, detail, steps, button, locate])
+            stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            window.contentView!.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
+                stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
+                stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24)
+            ])
+            permissionWindow = window
+        }
+        permissionWindow?.center()
+        permissionWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func updateAccessLabel() {
@@ -916,13 +992,17 @@ private final class PocketController: NSObject, NSApplicationDelegate {
         return window
     }
 
+    @objc private func revealRunningApp() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+    }
+
     @objc private func openAccessibilitySettings() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
     @objc private func showManageWindow() {
-        guard AXIsProcessTrusted() else { openAccessibilitySettings(); return }
+        guard AXIsProcessTrusted() else { showPermissionSetup(); return }
         managedExtras = allExtras()
         let window: NSWindow
         if let existing = manageWindow { window = existing }
