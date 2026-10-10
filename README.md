@@ -5,8 +5,8 @@
 <h1 align="center">BarPocket</h1>
 
 <p align="center">
-  <strong>Your menu bar has pockets now.</strong><br>
-  A small native macOS app for the icons you want nearby, just not <em>right there</em> all day.
+  <strong>Keep menu bar icons in a pocket.</strong><br>
+  A native macOS app that keeps less-used icons below the menu bar.
 </p>
 
 <p align="center">
@@ -22,33 +22,39 @@
 
 ## The short version
 
-The menu bar is prime real estate. BarPocket puts less-used items behind a slim control and shows them in a compact row **below** the menu bar, where the MacBook notch cannot eat them.
+BarPocket hides less-used menu bar items and shows them in a compact row **below** the bar. You can reach them without losing them behind the MacBook notch.
 
 | Need | BarPocket's answer |
 | --- | --- |
-| A little breathing room | Items left of its divider stay out of the visible menu bar. |
-| A quick peek | Click or hover over BarPocket to open the pocket. |
+| Hide less-used icons | Items left of its divider stay out of the visible menu bar. |
+| Open the pocket | Click or hover over BarPocket to open the pocket. |
 | Keep an item visible | Drag it from the pocket to the menu bar. |
 | Put an item back | Drag it onto BarPocket or the open pocket. |
 | An app that intercepts dragging | Use **Manage icons…** in Settings. |
 
 No subscription or account. Brief local still captures supply the real menu bar artwork; no video or audio stream runs.
 
-## What's in the pocket?
+## Features
 
-- **A row below the menu bar.** The translucent pocket opens on click or hover and can close when your pointer leaves.
-- **Two-way drag and drop.** Move items between the pocket and visible menu bar; BarPocket remembers which ones you keep visible.
-- **Native menus.** Click a pocket item to activate its actual menu bar item. Where macOS exposes the opened menu, BarPocket returns the item after that menu closes.
-- **A manual escape hatch.** Temporarily expand the menu bar or use **Manage icons…** when an app does something unusual.
-- **A few useful switches.** Choose hover opening, automatic closing, and launch at login.
-- **A tidy exit.** A normal quit restores the hidden items to the menu bar.
+- **Click or hover to open.** Hidden icons appear in a compact row below the menu bar. Optional automatic closing dismisses it when your pointer leaves.
+- **Actual icon artwork.** Transparent backgrounds and original menu bar sizes are preserved; no initials replace the icons.
+- **Status badges.** Icon stills refresh every three seconds while the pocket is open, including coloured badges and battery state. Faster animations can be skipped.
+- **Native app menus.** Click an icon to activate its original menu bar item. When the opened menu is detected, the item returns after the menu closes.
+- **Drag in either direction.** Drag from the pocket to keep an icon visible, or drag it back to hide it. Visible-item choices are saved; some apps may need repinning after restart.
+- **New and closed apps.** New or reopened items receive fresh artwork; closed items are removed.
+- **Light and dark appearance.** Settings and the pocket follow macOS appearance. Monochrome artwork adapts while coloured badges remain intact.
+- **Manage icons.** Move items from Settings when a third-party app intercepts dragging. Temporary menu bar expansion is also available.
+- **Permission setup.** Native items stay visible until Accessibility, Screen Recording access and usable icon images are available.
+- **One running instance.** Launching another copy activates the existing app.
+- **Native settings.** Choose hover opening, automatic closing and launch at login.
+- **Local operation.** No account, analytics, image uploads, video stream or audio capture. A normal quit restores hidden items.
 
 ## Watch the demo
 
 [![BarPocket drag-and-drop preview](docs/media/barpocket-preview.gif)](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4)
 
 [Watch or download the 42-second demo](https://github.com/Abdulrhman02/BarPocket/raw/refs/heads/main/docs/media/barpocket-demo.mp4).
-**This is the earlier v0.7 illustration; its final requirements card predates v0.8. Use the macOS 14+ and two-permission requirements below. An updated demo is in review.** The video uses animated interactions and actual native settings captures. Its sample icons illustrate the pocket; the current app captures real menu bar artwork instead of showing initials. The divider is omitted from the illustration for clarity; the real app uses a divider to hide native items.
+The approved v0.8 demo shows opening an app menu, dragging an icon out and back, status badges, and current light/dark settings. Interactions are animated; icon artwork, the example AppKit menu and settings views are native assets. The example app’s red/green badge illustrates a status change. The divider is omitted for clarity; the real app uses one to hide native items.
 
 ## Settings
 
@@ -114,7 +120,7 @@ If the switch says “on” but BarPocket still cannot see items, [try the permi
 
 Settings also has the hover, automatic closing, and launch-at-login switches. BarPocket allows one running instance per macOS user. Launching another copy activates the existing app instead of adding more menu bar items.
 
-## Privacy, without the mystery
+## Permissions and privacy
 
 BarPocket uses **Accessibility** to discover, click, and move native menu bar items. **Screen Recording** permission is used for brief still captures of their icon rectangles. It does not create a video stream, capture audio, use your microphone, send analytics, or upload images.
 
@@ -122,7 +128,7 @@ Images and their owner-process identities are cached locally in macOS preference
 
 Native icon-window captures preserve transparent backgrounds and coloured status badges, including items outside the visible menu bar. The pocket uses a macOS popover surface and preserves the artwork’s native menu bar point size. Monochrome artwork uses native light/dark tinting; dark neutral ink in mixed-colour artwork is adjusted for dark material while coloured badges and alpha remain intact. No wallpaper screenshot or temporary rearrangement is needed. If native capture fails, the group stays visible; initials are never substituted. This relies on undocumented WindowServer window discovery and a deprecated still-image API, because the ScreenCaptureKit shareable window list did not expose offscreen status windows in our tests. Future macOS changes may affect compatibility.
 
-## Honest fine print
+## Limitations
 
 macOS does not provide a public API for hiding another app's status item. BarPocket uses its own status items to move a group of items out of view, then Accessibility to find and interact with them. This works well for many apps, but some protected system items and unusual menus resist moving or activation.
 
